@@ -1,3 +1,11 @@
+-- LPH_NO_VIRTUALIZE fallback shim (per Luarmor docs).
+-- Keeps the UNOBFUSCATED source runnable: the macro becomes an identity
+-- function. When this file is obfuscated by Luarmor/Luraph, the macro
+-- calls are processed at obfuscation time and this shim is not needed.
+loadstring([[
+    function LPH_NO_VIRTUALIZE(f) return f end;
+]])();
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Events2 = ReplicatedStorage:WaitForChild("Events2")
 
@@ -19,14 +27,6 @@ end
 pcall(function()
     loadstring(game:HttpGet('https://raw.githubusercontent.com/Pixeluted/adoniscries/main/Source.lua'))()
 end);
-
--- LPH_NO_VIRTUALIZE fallback shim (per Luarmor docs).
--- Keeps the UNOBFUSCATED source runnable: the macro becomes an identity
--- function. When this file is obfuscated by Luarmor/Luraph, the macro
--- calls are processed at obfuscation time and this shim is not needed.
-if not LPH_NO_VIRTUALIZE then
-    LPH_NO_VIRTUALIZE = function(f) return f end
-end
 
 -- ============================================================
 -- GAME-AWARE CONFIG FOLDER ROUTING
