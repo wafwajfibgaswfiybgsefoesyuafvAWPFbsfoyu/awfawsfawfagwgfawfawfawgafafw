@@ -2,9 +2,7 @@
 -- Keeps the UNOBFUSCATED source runnable: the macro becomes an identity
 -- function. When this file is obfuscated by Luarmor/Luraph, the macro
 -- calls are processed at obfuscation time and this shim is not needed.
-loadstring([[
-    function LPH_NO_VIRTUALIZE(f) return f end;
-]])();
+local LPH_NO_VIRTUALIZE = function(f) return f end;
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Events2 = ReplicatedStorage:WaitForChild("Events2")
