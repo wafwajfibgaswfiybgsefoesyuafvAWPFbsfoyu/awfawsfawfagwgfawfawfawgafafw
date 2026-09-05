@@ -12533,8 +12533,16 @@ _RegisterHeartbeat(LPH_NO_VIRTUALIZE(function(dt)
                                                                 local hitPos = hitPart.Position;
 
                                                                 -- Fire one redirected ZF_H per bullet (shotguns = multiple pellets)
-                                                                task.wait(0.005);
+                                                                -- Wallbang fires its own GNX_S+ZF_H pair so it doesn't need to
+                                                                -- wait for the game's GNX_S. The wait is only needed in non-wallbang
+                                                                -- mode so the game's bullet record is registered first.
+                                                                if not _G.WallbangEnabled then
+                                                                        task.wait(0.005);
+                                                                end;
                                                                 local nBullets = (type(bulletsPerShot) == "table") and #bulletsPerShot or 1;
+                                                                if _nrMem and _nrMem.BulletMulti and _nrMem.BulletMulti > 1 then
+                                                                        nBullets = math.max(nBullets, math.floor(nBullets * _nrMem.BulletMulti));
+                                                                end;
                                                                 for i = 1, nBullets do
                                                                         if V._fireSilentHit then
                                                                                 -- pass the target player so _fireSilentHit can key
@@ -13781,6 +13789,7 @@ end;
                                 local _fn = _G.WMApplyToAll;
                                 if _fn then pcall(_fn) end;
                         end;
+
                 end,
         });
         do
@@ -18038,32 +18047,11 @@ do
         end
 
         -- ── SPINBOT ────────────────────────────────────────────
-        -- Spins the WHOLE body around the Y axis at high speed by
-        -- rotating the character's RootJoint locally (so the user
-        -- sees their own body spinning in third person) AND by
-        -- telling the server via DoTweak (so other players see it
-        -- too). The previous version only sent DoTweak — the local
-        -- body never visibly spun.
+        -- Directly rotates HumanoidRootPart.CFrame each frame so
+        -- the whole character spins in place around the Y axis.
         if modes["Spinbot"] then
-            _aaState.SpinAngle = (_aaState.SpinAngle or 0) + (_dt * _aaState.RotSpeed)
-            local spinCF = CFrame.Angles(0, _aaState.SpinAngle, 0)
-            -- 1) Local body spin via RootJoint C0
-            if _aaState.OrigRootC0 and _aaState.OrigHRP then
-                local rj = _aaState.OrigHRP:FindFirstChild("RootJoint")
-                        or (char:FindFirstChild("LowerTorso") and char.LowerTorso:FindFirstChild("Root"))
-                if rj then
-                    rj.C0 = _aaState.OrigRootC0 * spinCF
-                end
-            end
-            -- 2) Server-side spin via DoTweak (so other clients see it)
-            if hrp and _aaState.DoTweakFn then
-                pcall(_aaState.DoTweakFn,
-                    char,
-                    hrp.Position + Vector3.new(0, 10, 0),
-                    hrp.Position,
-                    spinCF.LookVector,
-                    true, false, true, true, true,
-                    9e9, true)
+            if hrp then
+                hrp.CFrame = hrp.CFrame * CFrame.Angles(0, math.rad(_aaState.RotSpeed), 0)
             end
         end
     end))
@@ -20683,40 +20671,99 @@ end;
         RapidFire = false,
         RapidFireRate = 999,
         FullAuto = false,
+        BulletMulti = 1,
+        BulletMultiAmt = 3,
         Conns = {},
     };
 
-    local function _nrMemCache()
+    local _nrMemCache = LPH_NO_VIRTUALIZE(function()
         _nrMem.Cache = {};
         for _, v in pairs(getgc(true)) do
-            if type(v) == "table" and rawget(v, "EquipTime") then
-                table.insert(_nrMem.Cache, v);
-                        if not _nrMem.OrigVals[v] then
-                            _nrMem.OrigVals[v] = {
-                                Recoil = v.Recoil,
-                                CameraRecoilingEnabled = v.CameraRecoilingEnabled,
-                                AngleX_Min = v.AngleX_Min, AngleX_Max = v.AngleX_Max,
-                                AngleY_Min = v.AngleY_Min, AngleY_Max = v.AngleY_Max,
-                                AngleZ_Min = v.AngleZ_Min, AngleZ_Max = v.AngleZ_Max,
-                                Spread = v.Spread,
-                                NFP_SPR_M = v.NFP_SPR_M,
-                                WalkSpreadIncrease = v.WalkSpreadIncrease,
-                                FireRate = v.FireRate,
-                                BurstRate = v.FireModeSettings and v.FireModeSettings.BurstRate,
-                                DelayBeforeFiring = v.DelayBeforeFiring,
-                                FireMode = v.FireModeSettings and v.FireModeSettings.FireMode,
-                                CanSwitch = v.FireModeSettings and v.FireModeSettings.CanSwitch,
-                            };
-                end;
-            end;
+            if type(v) ~= "table" then continue end
+            -- Only match plain tables that have ALL three fields as raw keys.
+            -- rawget never triggers metatables so it's safe on any object.
+            if rawget(v, "EquipTime") == nil then continue end
+            if rawget(v, "FireRate") == nil then continue end
+            if rawget(v, "FireModeSettings") == nil then continue end
+            table.insert(_nrMem.Cache, v);
+            if not _nrMem.OrigVals[v] then
+                local fm = rawget(v, "FireModeSettings")
+                _nrMem.OrigVals[v] = {
+                    BulletsPerShot = v.BulletsPerShot,
+                    Recoil = v.Recoil,
+                    CameraRecoilingEnabled = v.CameraRecoilingEnabled,
+                    AngleX_Min = v.AngleX_Min, AngleX_Max = v.AngleX_Max,
+                    AngleY_Min = v.AngleY_Min, AngleY_Max = v.AngleY_Max,
+                    AngleZ_Min = v.AngleZ_Min, AngleZ_Max = v.AngleZ_Max,
+                    Spread = v.Spread,
+                    NFP_SPR_M = v.NFP_SPR_M,
+                    WalkSpreadIncrease = v.WalkSpreadIncrease,
+                    FireRate = v.FireRate,
+                    BurstRate = fm and fm.BurstRate,
+                    DelayBeforeFiring = v.DelayBeforeFiring,
+                    FireMode = fm and fm.FireMode,
+                    CanSwitch = fm and fm.CanSwitch,
+                };
+            end
         end;
-    end;
+    end);
+
+        -- Scans getgc for the deep-copied config table the gun's fire loop
+    -- actually uses (stored as tbl_upv_8.fcf). Identified by having
+    -- both FireRate and FireModeSettings as a plain writable table.
+    local _liveCfgCache = {}
+    local _scanLiveCfgs = LPH_NO_VIRTUALIZE(function()
+        _liveCfgCache = {}
+        for _, v in pairs(getgc(true)) do
+            if type(v) ~= "table" then continue end
+            local fr  = rawget(v, "FireRate")
+            local eq  = rawget(v, "EquipTime")
+            local fms = rawget(v, "FireModeSettings")
+            if fr ~= nil and eq ~= nil and type(fms) == "table" then
+                -- This is a plain writable deep-copy of a gun config
+                table.insert(_liveCfgCache, v)
+            end
+        end
+    end)
 
     local function _nrMemApply()
+        for _, lc in ipairs(_liveCfgCache) do
+            local found = false
+            for _, cached in ipairs(_nrMem.Cache) do
+                if cached == lc then found = true; break end
+            end
+            if not found then
+                table.insert(_nrMem.Cache, lc)
+                if not _nrMem.OrigVals[lc] then
+                    local fm = rawget(lc, "FireModeSettings")
+                    _nrMem.OrigVals[lc] = {
+                        BulletsPerShot = lc.BulletsPerShot,
+                        Recoil = lc.Recoil,
+                        CameraRecoilingEnabled = lc.CameraRecoilingEnabled,
+                        AngleX_Min = lc.AngleX_Min, AngleX_Max = lc.AngleX_Max,
+                        AngleY_Min = lc.AngleY_Min, AngleY_Max = lc.AngleY_Max,
+                        AngleZ_Min = lc.AngleZ_Min, AngleZ_Max = lc.AngleZ_Max,
+                        Spread = lc.Spread,
+                        NFP_SPR_M = lc.NFP_SPR_M,
+                        WalkSpreadIncrease = lc.WalkSpreadIncrease,
+                        FireRate = lc.FireRate,
+                        BurstRate = fm and fm.BurstRate,
+                        DelayBeforeFiring = lc.DelayBeforeFiring,
+                        FireMode = fm and fm.FireMode,
+                        CanSwitch = fm and fm.CanSwitch,
+                    }
+                end
+            end
+        end
         for _, w in ipairs(_nrMem.Cache) do
             local o = _nrMem.OrigVals[w];
             if o then
-                w.Recoil = (o.Recoil or 0) * _nrMem.RecoilVal;
+                -- Use pcall on every write because protectTable userdata
+                -- blocks direct assignment. pcall silently skips failures.
+                local function ws(tbl, key, val)
+                    pcall(function() tbl[key] = val end)
+                end
+                ws(w, "Recoil", (o.Recoil or 0) * _nrMem.RecoilVal);
                 w.CameraRecoilingEnabled = _nrMem.RecoilVal > 0.01;
                 w.AngleX_Min = (o.AngleX_Min or 0) * _nrMem.RecoilVal;
                 w.AngleX_Max = (o.AngleX_Max or 0) * _nrMem.RecoilVal;
@@ -20754,12 +20801,19 @@ end;
                         end;
                     end;
                 end;
+                -- bullet multiplier
+                if _nrMem.BulletMulti > 1 then
+                    w.BulletsPerShot = math.max(1, math.floor((o.BulletsPerShot or 1) * _nrMem.BulletMulti));
+                else
+                    w.BulletsPerShot = o.BulletsPerShot or 1;
+                end;
             end;
         end;
     end;
 
     local function _nrMemReset()
         for w, val in pairs(_nrMem.OrigVals) do
+            if val.BulletsPerShot then w.BulletsPerShot = val.BulletsPerShot; end;
             w.Recoil = val.Recoil;
             w.CameraRecoilingEnabled = val.CameraRecoilingEnabled;
             w.AngleX_Min = val.AngleX_Min; w.AngleX_Max = val.AngleX_Max;
@@ -20805,11 +20859,15 @@ end;
         table.insert(_nrMem.Conns, lp.CharacterAdded:Connect(_nrMemOnChar));
         if lp.Character then _nrMemOnChar(lp.Character); end;
         -- Re-apply every 2s so newly-loaded gun configs get caught.
+        -- Both cache and apply run inside task.spawn so they never block a frame.
         task.spawn(function()
             while _nrMem.Enabled do
                 task.wait(2);
-                _nrMemCache();
-                _nrMemApply();
+                task.spawn(function()
+                    _nrMemCache();
+                    _scanLiveCfgs();
+                    _nrMemApply();
+                end);
             end;
         end);
     end;
@@ -20821,6 +20879,14 @@ end;
         for _, c in ipairs(_nrMem.Conns) do c:Disconnect(); end;
         _nrMem.Conns = {};
     end;
+
+    -- ── Rapid fire: fully config-table driven (no getgc, no upvalue patching) ──
+    -- _nrMemApply already sets FireRate_upv_1 via tbl_upv_8.fcf (u5) and patches
+    -- FireModeSettings.FireMode for full-auto. The fire loop throttle
+    -- (tick() - lastFireTick >= 1/FireRate) resolves on its own once FireRate
+    -- is set high enough. No heartbeat patcher needed.
+    local function _rfApply() end   -- no-op; kept so toggle callbacks compile
+    local function _rfRestore() end -- no-op; _nrMemApply restores on toggle-off
 
     -- ── Weapon mod controls ───────────────────────────────────
     local SecWM = TabLegit:Section({ Name = "weapon mods", Side = "Right" })
@@ -20856,6 +20922,13 @@ end;
         Name = "no spread", Flag = "WM_NRMem_Spread", Default = false,
         Callback = function(val)
             _nrMem.SpreadVal = val and 0 or 1;
+            -- Also patch wmState so the GNX remote hook rewrites shot direction
+            local _wm = _G.WMState;
+            if _wm then
+                _wm.spread = val and 0 or 1;
+                local _fn = _G.WMApplyToAll;
+                if _fn then pcall(_fn) end;
+            end;
             if val and not _nrMem.Enabled then
                 _nrMem.RecoilVal = _nrMem.RecoilVal or 1;
                 _nrMemEnable();
@@ -20869,6 +20942,40 @@ end;
         Name = "rapid fire", Flag = "WM_NRRapid", Default = false,
         Callback = function(val)
             _nrMem.RapidFire = val;
+            if val then
+                if not _nrMem.Enabled then
+                    _nrMem.RecoilVal = _nrMem.RecoilVal or 1;
+                    _nrMem.SpreadVal = _nrMem.SpreadVal or 1;
+                    _nrMemEnable();
+                end;
+            else
+                _rfRestore();
+            end;
+            if _nrMem.Enabled then _nrMemApply(); end;
+        end,
+    });
+    do
+        local dlg = _nrRapidToggle:AddDialog({ Name = "rapid fire settings" });
+        dlg:Slider({
+            Name = "fire rate", Flag = "WM_NRRapidRate",
+            Min = 1, Max = 10, Default = 10, Step = 0.1, Decimals = 1,
+            Callback = function(val)
+                local rate = math.floor(((val / 10) ^ 3) * 999 + 0.5)
+                rate = math.max(1, rate)
+                _nrMem.RapidFireRate = rate;
+                local _wm = _G.WMState;
+                if _wm then _wm.rapidfireAmt = rate; end;
+                if _nrMem.Enabled then _nrMemApply(); end;
+                if _nrMem.RapidFire then _rfApply(); end;
+            end,
+        });
+    end;
+
+        -- Bullet Multiplier: overrides BulletsPerShot so each shot registers N hits server-side.
+    local _nrBulletMultiToggle = SecWM:Toggle({
+        Name = "bullet multiplier", Flag = "WM_NRBulletMulti", Default = false,
+        Callback = function(val)
+            _nrMem.BulletMulti = val and _nrMem.BulletMultiAmt or 1;
             if val and not _nrMem.Enabled then
                 _nrMem.RecoilVal = _nrMem.RecoilVal or 1;
                 _nrMem.SpreadVal = _nrMem.SpreadVal or 1;
@@ -20878,21 +20985,40 @@ end;
         end,
     });
     do
-        local dlg = _nrRapidToggle:AddDialog({ Name = "rapid fire settings" });
+        local dlg = _nrBulletMultiToggle:AddDialog({ Name = "bullet multiplier settings" });
         dlg:Slider({
-            Name = "fire rate", Flag = "WM_NRRapidRate",
-            Min = 1, Max = 999, Default = 999, Step = 1,
+            Name = "bullets per shot", Flag = "WM_NRBulletMultiAmt",
+            Min = 1, Max = 7, Default = 3, Step = 1, Decimals = 0,
             Callback = function(val)
-                _nrMem.RapidFireRate = val;
-                if _nrMem.Enabled then _nrMemApply(); end;
+                _nrMem.BulletMultiAmt = val;
+                if _nrMem.BulletMulti > 1 then
+                    _nrMem.BulletMulti = val;
+                    if _nrMem.Enabled then _nrMemApply(); end;
+                end;
             end,
         });
     end;
 
+    -- Always Headshot: patches HeadshotMultiplier to a huge value so every
+    -- body-part hit still deals headshot-tier damage server-side.
+    -- Works independently of silent aim — no SA required.
+    SecWM:Toggle({
+        Name = "always headshot", Flag = "WM_AlwaysHeadshot", Default = false,
+        Callback = function(val)
+            _nrMem.AlwaysHeadshot = val;
+            if val and not _nrMem.Enabled then
+                _nrMem.RecoilVal = _nrMem.RecoilVal or 1;
+                _nrMem.SpreadVal = _nrMem.SpreadVal or 1;
+                _nrMemEnable();
+            end;
+            if _nrMem.Enabled then _nrMemApply(); end;
+        end,
+    });
+
     -- Force Full-Auto (memory): sets FireMode = "Auto" on all cached configs
     -- also enables force full-auto for pistols which are Semi by default
     SecWM:Toggle({
-        Name = "force full-auto", Flag = "WM_NRFullAuto", Default = false,
+        Name = "force full auto", Flag = "WM_NRFullAuto", Default = false,
         Callback = function(val)
             _nrMem.FullAuto = val;
             if val and not _nrMem.Enabled then
@@ -20901,6 +21027,103 @@ end;
                 _nrMemEnable();
             end;
             if _nrMem.Enabled then _nrMemApply(); end;
+        end,
+    });
+
+    -- Invalid shot on miss: refunds ammo locally when a shot doesn't register a hit.
+    -- Hooks tool.Hitmarker (BindableEvent the gun module fires on confirmed hit)
+    -- and tool.Values.Ammo. Each time Ammo drops by 1, we start a 350ms window;
+    -- if Hitmarker hasn't fired by then → miss → refund +1.
+    local _ismEnabled = false
+    local _ismConn_ammo    = nil
+    local _ismConn_hit     = nil
+    local _ismConn_hit2    = nil
+    local _ismConn_equip   = nil
+    local _ismConn_unequip = nil
+    local _ismPending = 0  -- count of shots awaiting hitmarker confirmation
+
+    local function _ismTeardown()
+        if _ismConn_ammo    then _ismConn_ammo:Disconnect();    _ismConn_ammo    = nil end
+        if _ismConn_hit     then _ismConn_hit:Disconnect();     _ismConn_hit     = nil end
+        if _ismConn_hit2    then _ismConn_hit2:Disconnect();    _ismConn_hit2    = nil end
+        _ismPending = 0
+    end
+
+    local function _ismSetupTool(tool)
+        _ismTeardown()
+        if not tool or not _ismEnabled then return end
+        local values = tool:FindFirstChild("Values")
+        local ammoVal = values and values:FindFirstChild("Ammo")
+        local hitmark = tool:FindFirstChild("Hitmarker")
+        local hitmark2 = tool:FindFirstChild("Hitmarker2")
+        if not ammoVal then return end
+
+        -- When Ammo drops by 1: a shot was fired, start a miss window
+        local lastAmmo = ammoVal.Value
+        _ismConn_ammo = ammoVal.Changed:Connect(function(newVal)
+            if not _ismEnabled then return end
+            if newVal < lastAmmo then
+                -- shot fired
+                _ismPending = _ismPending + 1
+                local shotPending = _ismPending
+                task.delay(0.35, function()
+                    if not _ismEnabled then return end
+                    -- if pending count hasn't decreased (no hitmarker came), it's a miss
+                    if _ismPending >= shotPending then
+                        _ismPending = math.max(0, _ismPending - 1)
+                        ammoVal.Value = ammoVal.Value + 1
+                    end
+                end)
+            end
+            lastAmmo = newVal
+        end)
+
+        -- When hitmarker fires: a hit was confirmed, consume one pending slot
+        if hitmark then
+            _ismConn_hit = hitmark.Event:Connect(function()
+                if not _ismEnabled then return end
+                _ismPending = math.max(0, _ismPending - 1)
+            end)
+        end
+        if hitmark2 then
+            _ismConn_hit2 = hitmark2.OnClientEvent:Connect(function()
+                if not _ismEnabled then return end
+                _ismPending = math.max(0, _ismPending - 1)
+            end)
+        end
+    end
+
+    -- Watch for tool equip/unequip to rewire hooks
+    local function _ismWatchChar(char)
+        if not char then return end
+        _ismConn_equip = char.ChildAdded:Connect(function(child)
+            if child:IsA("Tool") and _ismEnabled then
+                task.defer(function() _ismSetupTool(child) end)
+            end
+        end)
+        _ismConn_unequip = char.ChildRemoved:Connect(function(child)
+            if child:IsA("Tool") then
+                _ismTeardown()
+            end
+        end)
+        -- Wire up currently equipped tool if any
+        for _, child in ipairs(char:GetChildren()) do
+            if child:IsA("Tool") then _ismSetupTool(child) break end
+        end
+    end
+
+    SecWM:Toggle({
+        Name = "invalid shot if miss", Flag = "WM_InvalidShotMiss", Default = false,
+        Callback = function(val)
+            _ismEnabled = val
+            if val then
+                local char = LocalPlayer.Character
+                _ismWatchChar(char)
+            else
+                _ismTeardown()
+                if _ismConn_equip   then _ismConn_equip:Disconnect();   _ismConn_equip   = nil end
+                if _ismConn_unequip then _ismConn_unequip:Disconnect(); _ismConn_unequip = nil end
+            end
         end,
     });
 
@@ -23498,7 +23721,7 @@ do
         Library._TargetHUD_StartUpdate = function()
                 if _targetHudConn then return end;
                 local RunService = game:GetService("RunService");
-                _targetHudConn = _RegisterHeartbeat(function(dt)
+                _targetHudConn = _RegisterHeartbeat(LPH_NO_VIRTUALIZE(function(dt)
                         _targetHudAcc = _targetHudAcc + dt;
                         if _targetHudAcc < 0.05 then return end;
                         _targetHudAcc = 0;
@@ -23801,7 +24024,7 @@ do
                                         hud.HealthValue.Text = "";
                                 end;
                         end);
-                end);
+                end));   
         end;
         Library._TargetHUD_StopUpdate = function()
                 if _targetHudConn then
